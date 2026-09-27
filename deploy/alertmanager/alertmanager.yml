@@ -1,0 +1,20 @@
+route:
+  receiver: jev-triage
+  group_by: ["alertname", "host", "instance"]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+  routes:
+    # Never send the triage service's own alerts into itself.
+    - matchers: ['component="triage"']
+      receiver: operators
+
+receivers:
+  - name: jev-triage
+    webhook_configs:
+      - url: http://triage:8080/v1/alertmanager
+        send_resolved: true
+        max_alerts: 50
+
+  # Placeholder: wire to email/Slack/PagerDuty in a real deployment.
+  - name: operators

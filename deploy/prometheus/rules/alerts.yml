@@ -1,0 +1,43 @@
+groups:
+  - name: host
+    rules:
+      - alert: HostDiskAlmostFull
+        expr: |
+          (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+             / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} is {{ $value | printf \"%.0f\" }}% full"
+          description: "Less than 15% space left on {{ $labels.device }}."
+
+      - alert: HostHighLoad
+        expr: node_load5 / count without (cpu, mode) (node_cpu_seconds_total{mode="idle"}) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5-minute load is {{ $value | printf \"%.1f\" }}x the CPU count"
+
+  # Alerts about the triage service itself. Routed to a separate receiver in
+  # Alertmanager so the service never triages its own failure.
+  - name: triage-self
+    rules:
+      - alert: TriageDegraded
+        expr: max(triage_circuit_breaker_open) == 1
+        for: 1m
+        labels:
+          severity: warning
+          component: triage
+        annotations:
+          summary: "Jev is unavailable; triage is running on rule-based fallback"
+
+      - alert: TriageDown
+        expr: up{job="triage"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: triage
+        annotations:
+          summary: "jev-triage is not responding to scrapes"

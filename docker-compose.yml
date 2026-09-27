@@ -1,0 +1,117 @@
+# jev-triage demo stack
+#
+#   cp .env.example .env   # add TYPESAFE_API_KEY
+#   docker compose up -d --build
+#
+#   Grafana       http://localhost:3000   (admin / $GF_ADMIN_PASSWORD)
+#   Triage API    http://localhost:8080/docs
+#   Prometheus    http://localhost:9090
+#   Alertmanager  http://localhost:9093
+#
+# Data flow:
+#   loggen -> files -> Alloy -> Loki --(LogQL rules)--> Alertmanager --webhook--> triage
+#   node-exporter -> Prometheus --(rules)--------------> Alertmanager --webhook--> triage
+#   (optional) loggen --(WARNING+ lines)-------------------------------> triage /v1/logs
+#   Prometheus scrapes triage /metrics -> Grafana dashboard
+
+name: jev-triage
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  triage:
+    <<: *restart
+    build: .
+    image: jev-triage:dev
+    env_file: .env
+    environment:
+      TRIAGE_LOKI_URL: http://loki:3100
+    ports: ["8080:8080"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      loki:
+        condition: service_started
+
+  loggen:
+    <<: *restart
+    image: python:3.12-slim
+    command: ["python", "-u", "/app/loggen.py"]
+    environment:
+      LOG_DIR: /var/log/demo
+      LINES_PER_SECOND: "4"
+      # Off by default: the demo triages *alerts*. Set to http://triage:8080 to also push
+      # raw WARNING+ lines to /v1/logs (the same incident is then counted twice).
+      TRIAGE_URL: ""
+      PUSH_INTERVAL_S: "15"
+    volumes:
+      - ./deploy/loggen/loggen.py:/app/loggen.py:ro
+      - demo-logs:/var/log/demo
+
+  alloy:
+    <<: *restart
+    image: grafana/alloy:v1.10.0
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - demo-logs:/var/log/demo:ro
+    depends_on: [loki]
+
+  loki:
+    <<: *restart
+    image: grafana/loki:3.5.0
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./deploy/loki/loki.yml:/etc/loki/loki.yml:ro
+      - ./deploy/loki/rules:/etc/loki/rules:ro
+      - loki-data:/loki
+    ports: ["3100:3100"]
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=3d
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
+      - prom-data:/prometheus
+    ports: ["9090:9090"]
+
+  alertmanager:
+    <<: *restart
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+
+  node-exporter:
+    <<: *restart
+    image: prom/node-exporter:v1.9.1
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/jev-triage.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus, loki]
+
+volumes:
+  demo-logs:
+  loki-data:
+  prom-data:
+  grafana-data:

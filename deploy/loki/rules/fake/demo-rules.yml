@@ -1,0 +1,69 @@
+# Log-based alerts. Counting and time windows happen here, in LogQL, not in the model:
+# Jev gets the *result* ("14 failed logins in 2m") and judges what it means.
+groups:
+  - name: demo-logs
+    interval: 30s
+    rules:
+      - alert: SSHFailedLogins
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="sshd"} |= "Failed password" [2m])) > 5
+        labels:
+          source: loki
+        annotations:
+          summary: "{{ $value }} failed SSH logins on {{ $labels.host }} in the last 2 minutes"
+          description: "Repeated sshd 'Failed password' messages, including invalid usernames."
+
+      - alert: OutOfMemoryKill
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="kernel"} |= "Out of memory" [5m])) > 0
+        labels:
+          source: loki
+        annotations:
+          summary: "Kernel OOM killer terminated a process on {{ $labels.host }}"
+          description: "{{ $value }} OOM kill(s) in the last 5 minutes."
+
+      - alert: NoSpaceLeftOnDevice
+        expr: |
+          sum by (host, service) (count_over_time({job="demo"} |= "No space left on device" [5m])) > 0
+        labels:
+          source: loki
+        annotations:
+          summary: "Writes failing with ENOSPC on {{ $labels.host }} ({{ $labels.service }})"
+          description: "{{ $value }} failed writes in the last 5 minutes."
+
+      - alert: Nginx5xxBurst
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="nginx"} |~ `" 50[234] ` [2m])) > 10
+        labels:
+          source: loki
+        annotations:
+          summary: "{{ $value }} HTTP 5xx responses from nginx on {{ $labels.host }} in 2 minutes"
+          description: "Upstream errors (502/503/504) on the checkout endpoint."
+
+      - alert: DNSResolutionFailures
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="systemd-resolved"} |~ "SERVFAIL|NXDOMAIN" [5m])) > 2
+        labels:
+          source: loki
+        annotations:
+          summary: "DNS lookups failing on {{ $labels.host }}"
+          description: "{{ $value }} failed lookups for internal names in 5 minutes."
+
+      - alert: ReplicationStreamLost
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="postgres"} |= "replication terminated" [5m])) > 0
+        labels:
+          source: loki
+        annotations:
+          summary: "PostgreSQL replica on {{ $labels.host }} lost its WAL stream"
+          description: "Replica stopped receiving WAL from the primary."
+
+      - alert: TransientJobRetries
+        # Deliberately noisy: this is the alert-fatigue case triage should learn to quiet.
+        expr: |
+          sum by (host) (count_over_time({job="demo", service="app"} |= "retrying job" [5m])) > 3
+        labels:
+          source: loki
+        annotations:
+          summary: "Background jobs on {{ $labels.host }} are retrying"
+          description: "{{ $value }} retries (attempt 1/5) in 5 minutes; jobs usually succeed on retry."

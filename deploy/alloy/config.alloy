@@ -1,0 +1,40 @@
+// Grafana Alloy: tail the demo log files and ship them to Loki.
+// (Alloy replaces Promtail, which reached end-of-life.)
+
+local.file_match "demo" {
+  path_targets = [{"__path__" = "/var/log/demo/*.log", "job" = "demo"}]
+  sync_period  = "5s"
+}
+
+loki.source.file "demo" {
+  targets    = local.file_match.demo.targets
+  forward_to = [loki.process.syslog.receiver]
+}
+
+// "<RFC3339> <host> <service>[pid]: <message>"
+loki.process "syslog" {
+  stage.regex {
+    expression = "^(?P<ts>\\S+) (?P<host>\\S+) (?P<service>[A-Za-z0-9_.-]+)(?:\\[\\d+\\])?: (?P<msg>.*)$"
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "RFC3339"
+  }
+
+  // host and service are low-cardinality: safe as Loki labels.
+  stage.labels {
+    values = {
+      host    = "",
+      service = "",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
